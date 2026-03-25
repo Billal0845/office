@@ -1,0 +1,68 @@
+name: Deploy Laravel + React to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main # Change this if your branch is named 'master'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (for React)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20" # Use your required Node version
+
+      - name: Install dependencies and Build React
+        working-directory: ./frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Setup SSH Key for Rsync
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Sync files to Server via Rsync
+        run: |
+          # Sync everything to the root domain folder.
+          # We use exclusions so we don't delete Laravel's .env, storage, or vendor folders.
+          rsync -avz --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='frontend/node_modules/' \
+            --exclude='backend/vendor/' \
+            --exclude='backend/.env' \
+            --exclude='backend/storage/' \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/demandhatbd-officemanagement/htdocs/officemanagement.demandhatbd.com/
+
+      - name: Execute Remote SSH Commands (Laravel Setup)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/demandhatbd-officemanagement/htdocs/officemanagement.demandhatbd.com/backend
+
+            # Install Composer dependencies securely
+            composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
+
+            # Fix Permissions for Laravel
+            chmod -R 775 storage bootstrap/cache
+
+            # Link storage (if not already linked)
+            php artisan storage:link || true
+
+            # Clear and cache configurations
+            php artisan optimize:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
